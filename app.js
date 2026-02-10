@@ -42,14 +42,14 @@ const contextos = {
 };
 
 // =====================
-// Elo
+// 4) Parámetros Elo
 // =====================
 
 const RATING_INICIAL = 1000;
 const K = 32;
 
 // =====================
-// Estado
+// 5) Estado + storage
 // =====================
 
 const STORAGE_KEY = "sodamash_state_v1";
@@ -66,102 +66,186 @@ function defaultState(){
   return { buckets, votes: [] };
 }
 
-let state = JSON.parse(localStorage.getItem(STORAGE_KEY)) || defaultState();
+function loadState(){
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) return defaultState();
+  try { return JSON.parse(raw); }
+  catch { return defaultState(); }
+}
+
+let state = loadState();
 
 function saveState(){
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 // =====================
-// Elo helpers
+// 6) Elo helpers
 // =====================
 
-function expected(ra, rb){
+function expectedScore(ra, rb){
   return 1 / (1 + Math.pow(10, (rb - ra) / 400));
 }
 
 function updateElo(bucket, a, b, winner){
-  const ra = bucket[a], rb = bucket[b];
-  const ea = expected(ra, rb);
-  const eb = expected(rb, ra);
+  const ra = bucket[a];
+  const rb = bucket[b];
 
-  bucket[a] = ra + K * ((winner === "A" ? 1 : 0) - ea);
-  bucket[b] = rb + K * ((winner === "B" ? 1 : 0) - eb);
+  const ea = expectedScore(ra, rb);
+  const eb = expectedScore(rb, ra);
+
+  const sa = winner === "A" ? 1 : 0;
+  const sb = winner === "B" ? 1 : 0;
+
+  bucket[a] = ra + K * (sa - ea);
+  bucket[b] = rb + K * (sb - eb);
 }
 
 // =====================
-// UI
+// 7) UI wiring
 // =====================
 
 const segmentSelect = document.getElementById("segmentSelect");
 const contextSelect = document.getElementById("contextSelect");
+const questionEl = document.getElementById("question");
 const labelA = document.getElementById("labelA");
 const labelB = document.getElementById("labelB");
-const questionEl = document.getElementById("question");
 const topBox = document.getElementById("topBox");
 
-let A, B;
+const btnA = document.getElementById("btnA");
+const btnB = document.getElementById("btnB");
+const btnNewPair = document.getElementById("btnNewPair");
+const btnShowTop = document.getElementById("btnShowTop");
+const btnReset = document.getElementById("btnReset");
+const btnExport = document.getElementById("btnExport");
+
+let currentA = null;
+let currentB = null;
+
+// =====================
+// 8) Helpers UI
+// =====================
 
 function fillSelect(el, obj){
   el.innerHTML = "";
   for (const k in obj){
-    const o = document.createElement("option");
-    o.value = k;
-    o.textContent = obj[k];
-    el.appendChild(o);
+    const opt = document.createElement("option");
+    opt.value = k;
+    opt.textContent = obj[k];
+    el.appendChild(opt);
   }
 }
 
 fillSelect(segmentSelect, segmentos);
 fillSelect(contextSelect, contextos);
 
+segmentSelect.value = "F";
+contextSelect.value = "I";
+
 function newDuel(){
-  A = canciones[Math.floor(Math.random()*canciones.length)];
+  currentA = canciones[Math.floor(Math.random() * canciones.length)];
   do {
-    B = canciones[Math.floor(Math.random()*canciones.length)];
-  } while (A === B);
+    currentB = canciones[Math.floor(Math.random() * canciones.length)];
+  } while (currentA === currentB);
 
-  labelA.textContent = A;
-  labelB.textContent = B;
+  labelA.textContent = currentA;
+  labelB.textContent = currentB;
   questionEl.textContent = contextos[contextSelect.value];
-}
-
-function vote(w){
-  const key = `${segmentSelect.value}__${contextSelect.value}`;
-  updateElo(state.buckets[key], A, B, w);
-  saveState();
-  renderTop();
-  newDuel();
 }
 
 function renderTop(){
   const key = `${segmentSelect.value}__${contextSelect.value}`;
-  const arr = Object.entries(state.buckets[key])
-    .map(([song, rating]) => ({ song, rating }))
-    .sort((a,b) => b.rating - a.rating)
-    .slice(0,10);
+  const bucket = state.buckets[key];
 
-  topBox.innerHTML = arr.map((r,i)=>`
+  const rows = Object.entries(bucket)
+    .map(([song, rating]) => ({ song, rating }))
+    .sort((a, b) => b.rating - a.rating)
+    .slice(0, 10);
+
+  topBox.innerHTML = rows.map((r, i) => `
     <div class="toprow">
-      <div><b>${i+1}.</b> ${r.song}</div>
+      <div><b>${i + 1}.</b> ${r.song}</div>
       <div>${r.rating.toFixed(1)}</div>
     </div>
   `).join("");
 }
 
-document.getElementById("btnA").onclick = () => vote("A");
-document.getElementById("btnB").onclick = () => vote("B");
-document.getElementById("btnNewPair").onclick = newDuel;
-document.getElementById("btnShowTop").onclick = renderTop;
+function vote(winner){
+  const key = `${segmentSelect.value}__${contextSelect.value}`;
+  const bucket = state.buckets[key];
 
-document.getElementById("btnReset").onclick = () => {
-  if(confirm("¿Reiniciar todo el ranking?")){
-    state = defaultState();
-    saveState();
-    renderTop();
-    newDuel();
+  updateElo(bucket, currentA, currentB, winner);
+
+  state.votes.push({
+    ts: new Date().toISOString(),
+    segmento: segmentos[segmentSelect.value],
+    contexto: contextos[contextSelect.value],
+    A: currentA,
+    B: currentB,
+    ganador: winner === "A" ? currentA : currentB,
+    perdedor: winner === "A" ? currentB : currentA
+  });
+
+  saveState();
+  renderTop();
+  newDuel();
+}
+
+// =====================
+// 9) Eventos
+// =====================
+
+btnA.addEventListener("click", () => vote("A"));
+btnB.addEventListener("click", () => vote("B"));
+
+btnNewPair.addEventListener("click", newDuel);
+btnShowTop.addEventListener("click", renderTop);
+
+segmentSelect.addEventListener("change", renderTop);
+contextSelect.addEventListener("change", renderTop);
+
+btnReset.addEventListener("click", () => {
+  if (!confirm("Esto borrará todos los votos guardados. ¿Continuar?")) return;
+  state = defaultState();
+  saveState();
+  renderTop();
+  newDuel();
+});
+
+// =====================
+// 10) EXPORTAR CSV
+// =====================
+
+btnExport.addEventListener("click", () => {
+  if (state.votes.length === 0){
+    alert("Todavía no hay votos para exportar.");
+    return;
   }
-};
+
+  const headers = ["ts","segmento","contexto","A","B","ganador","perdedor"];
+  const lines = [headers.join(",")];
+
+  for (const v of state.votes){
+    const row = headers.map(h => `"${String(v[h]).replaceAll('"','""')}"`);
+    lines.push(row.join(","));
+  }
+
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "sodamash_votos.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+
+  URL.revokeObjectURL(url);
+});
+
+// =====================
+// INIT
+// =====================
 
 newDuel();
 renderTop();
